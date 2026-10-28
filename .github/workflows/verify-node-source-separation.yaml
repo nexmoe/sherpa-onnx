@@ -1,0 +1,67 @@
+name: Verify Node.js source separation
+
+on:
+  push:
+    branches:
+      - verify/node-source-separation
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: ${{ matrix.os }} Node 22 and 16
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: pnpm/action-setup@v4
+        with:
+          version: '8.15.9'
+      - name: Install build and style tools
+        run: |
+          python -m pip install ninja cpplint==2.0.2
+          pnpm --dir scripts/node-addon-api install --ignore-scripts --no-frozen-lockfile
+      - name: Build native libraries and all C++ unit tests
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$PWD/build/install" \
+            -DBUILD_SHARED_LIBS=ON \
+            -DSHERPA_ONNX_ENABLE_WEBSOCKET=OFF \
+            -DSHERPA_ONNX_ENABLE_PORTAUDIO=OFF \
+            -DSHERPA_ONNX_ENABLE_BINARY=OFF \
+            -DSHERPA_ONNX_ENABLE_TESTS=ON
+          cmake --build build --target install --parallel 2
+          ctest --test-dir build --output-on-failure --parallel 1
+      - name: Build and test Node 22 addon
+        env:
+          SHERPA_ONNX_INSTALL_DIR: ${{ github.workspace }}/build/install
+        run: |
+          pnpm --dir scripts/node-addon-api exec cmake-js compile --parallel 2
+          pnpm --dir scripts/node-addon-api run typecheck
+          pnpm --dir scripts/node-addon-api test
+          python -m cpplint scripts/node-addon-api/src/offline-source-separation.cc harmony-os/SherpaOnnxHar/sherpa_onnx/src/main/cpp/sherpa-onnx-node-addon-api.cc
+          bash .github/scripts/test-nodejs-addon-source-separation.sh
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '16.20.2'
+      - name: Rebuild and test Node 16 addon
+        env:
+          SHERPA_ONNX_INSTALL_DIR: ${{ github.workspace }}/build/install
+        run: |
+          pnpm --dir scripts/node-addon-api exec cmake-js rebuild --parallel 2
+          pnpm --dir scripts/node-addon-api test
+          bash .github/scripts/test-nodejs-addon-source-separation.sh
