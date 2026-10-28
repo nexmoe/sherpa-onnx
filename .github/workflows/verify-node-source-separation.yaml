@@ -6,6 +6,10 @@ on:
       - verify/node-source-separation
   workflow_dispatch:
 
+concurrency:
+  group: verify-node-source-separation-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
